@@ -6,3 +6,4 @@ faiss-cpu
 pydantic
 python-dotenv
 pytest
+openai>=1.6.0
