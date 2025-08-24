@@ -109,4 +109,6 @@ def review(state: Dict) -> Dict:
         return {"approved": approved, "review": {"feedback": fb}}
 
     parsed = _parse_review_json(content)
-    return {"approved": parsed["approved"], "review": {"feedback": parsed["feedback"]}}
+    return {"approved": False, "review": {"feedback": parsed["feedback"]}}
+
+# parsed["approved"]
