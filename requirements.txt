@@ -1,0 +1,8 @@
+langgraph
+langgraph-cli
+langchain
+langchain-community
+faiss-cpu
+pydantic
+python-dotenv
+pytest
