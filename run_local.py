@@ -8,5 +8,7 @@ if __name__ == "__main__":
         "attempts": 0,
         "approved": False,
     }
-    result = graph.invoke(initial_state)
+    # Provide a thread_id for the checkpointer
+    config = {"configurable": {"thread_id": "local-demo"}}
+    result = graph.invoke(initial_state, config=config)
     print("\nFinal state:\n", result)
