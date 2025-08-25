@@ -19,7 +19,8 @@ from typing import Dict, Final, List, Optional
 
 from dotenv import load_dotenv
 from langchain_community.vectorstores import FAISS
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
+
 
 # --- config ------------------------------------------------------------------
 
@@ -33,25 +34,25 @@ _CATEGORIES: Final[List[str]] = ["Billing", "Technical", "Security", "General"]
 _VDB_CACHE: Dict[str, FAISS] = {}
 
 # Minimal fallback corpus so the app keeps running if no index is present.
-_FALLBACK = {
-    "Technical": [
-        "Reset your password from Settings → Account → Reset Password.",
-        "Ensure app version is latest; try clearing cache and retry.",
-        "If email not received, check spam and rate limits.",
-    ],
-    "Billing": [
-        "Invoices are sent on the 1st of each month.",
-        "Refunds follow policy section 3.2 (no partial refunds after 14 days).",
-    ],
-    "Security": [
-        "MFA required for admin roles; see Security Policy §4.",
-        "Password rules: 12+ chars, mixed case, symbol.",
-    ],
-    "General": [
-        "Thanks for contacting support; we’re here to help.",
-        "Share screenshots to speed up troubleshooting.",
-    ],
-}
+# _FALLBACK = {
+#     "Technical": [
+#         "Reset your password from Settings → Account → Reset Password.",
+#         "Ensure app version is latest; try clearing cache and retry.",
+#         "If email not received, check spam and rate limits.",
+#     ],
+#     "Billing": [
+#         "Invoices are sent on the 1st of each month.",
+#         "Refunds follow policy section 3.2 (no partial refunds after 14 days).",
+#     ],
+#     "Security": [
+#         "MFA required for admin roles; see Security Policy §4.",
+#         "Password rules: 12+ chars, mixed case, symbol.",
+#     ],
+#     "General": [
+#         "Thanks for contacting support; we’re here to help.",
+#         "Share screenshots to speed up troubleshooting.",
+#     ],
+# }
 
 
 # --- helpers -----------------------------------------------------------------
