@@ -28,9 +28,9 @@ _openai = OpenAI()  # relies on OPENAI_API_KEY
 
 # --- constants ---------------------------------------------------------------
 
-MODEL_NAME: Final[str] = "gpt-4o-mini"  # Swap to "gpt-4o" if you want more headroom.
+MODEL_NAME: Final[str] = "gpt-4o-mini"  # model specified
 
-# Keep categories simple & explicit to avoid "creative" outputs.
+# Making the categories simple & explicit to avoid "creative" outputs.
 ALLOWED_CATEGORIES: Final[List[str]] = ["Billing", "Technical", "Security", "General"]
 
 # System message keeps the model focused and constrains output shape.

@@ -1,42 +1,38 @@
 """
-Reviewer (LLM-backed, lenient)
+Reviewer (LLM-backed, simple & strict enough)
 
-Goal:
-- Evaluate the draft for groundedness, policy compliance, tone, and actionability.
-- Prefer approving "mostly good" drafts; do not nitpick formatting.
-- Return: {"approved": bool, "review": {"feedback": str}}
+- Checks a couple of obvious policy rules up front (deterministic).
+- Otherwise asks the LLM to review the draft for: grounding, policy, tone, actionability.
+- Returns: {"approved": bool, "review": {"feedback": str}}
 """
 
 from __future__ import annotations
 
 import json
-import re
-from typing import Dict, Final, List, Set
+from typing import Dict, Final
 
 from dotenv import load_dotenv
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
 
-# --- bootstrap ---------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+# Bootstrap
+# --------------------------------------------------------------------------- #
 
 load_dotenv()
 _openai = OpenAI()
 
-MODEL_NAME: Final[str] = "gpt-4o-mini"  # swap to "gpt-4o" if desired
+MODEL_NAME: Final[str] = "gpt-4o-mini"  # use "gpt-4o" if you prefer
 
-# ✅ SOFTER RUBRIC: approve if the reply is mostly grounded & actionable.
 SYSTEM_PROMPT: Final[str] = (
-    "You are a pragmatic support reply reviewer.\n"
-    "Assess the assistant draft on FOUR checks:\n"
-    "1) Groundedness: Uses the given context and does not invent facts.\n"
-    "2) Policy: No refunds/promises beyond policy; no security leaks.\n"
-    "3) Tone: Empathetic, concise, professional.\n"
-    "4) Actionability: Clear steps or follow-up questions.\n\n"
-    "Be lenient about formatting and section headers (e.g., a 'Context' block is fine).\n"
-    "If the reply is mostly grounded and actionable with minor style issues, APPROVE IT.\n\n"
-    "Return ONLY JSON with keys: approved (true/false) and feedback (string).\n"
-    "Feedback must be short and actionable if not approved."
-    "Reject if the draft invents policy promises or refund paths not explicitly in context."
+    "You are a support reply reviewer.\n"
+    "Approve ONLY if ALL are true:\n"
+    "1) Grounded: draft uses a concrete fact from context (e.g., '14 days', a named feature, or a policy section).\n"
+    "2) Policy-safe: no promises beyond policy. If a request is outside the policy window, the draft clearly says so.\n"
+    "3) Tone: empathetic, concise, professional.\n"
+    "4) Actionable: includes a clear step or next question.\n\n"
+    "Return ONLY JSON: {\"approved\": bool, \"feedback\": \"...\"}.\n"
+    "If you reject, keep feedback short and actionable."
 )
 
 USER_TEMPLATE: Final[str] = (
@@ -52,40 +48,13 @@ USER_TEMPLATE: Final[str] = (
     "{draft}\n"
 )
 
-# --- simple token helpers (for leniency heuristic) ---------------------------
 
-_TOKEN_RE = re.compile(r"[A-Za-z0-9+#\-_/]{3,}")
-
-def _tokenize(text: str) -> List[str]:
-    return [t.lower() for t in _TOKEN_RE.findall(text or "")]
-
-def _looks_grounded_and_actionable(state: Dict) -> bool:
-    """
-    Lightweight guardrail to avoid nitpicky rejections:
-    - If draft overlaps well with context terms OR
-    - Draft explicitly shows a 'Context' section with items
-    - and it includes basic actionability markers,
-    then consider it good enough to approve.
-    """
-    draft = state.get("draft", "") or ""
-    ctx_list = state.get("context", []) or []
-    if ("Context:" in draft or "context:" in draft) and ctx_list:
-        has_steps_word = any(w in draft.lower() for w in ["step", "try", "follow", "please update", "reset"])
-        if has_steps_word:
-            return True
-
-    draft_tokens = set(_tokenize(draft))
-    ctx_tokens: Set[str] = set(_tokenize(" ".join(ctx_list)))
-    overlap = len(draft_tokens & ctx_tokens)
-
-    # If we share a decent number of tokens with context and the draft hints at actions, approve.
-    actionable = any(w in draft.lower() for w in ["please", "try", "follow", "update", "reset", "check"])
-    return overlap >= 5 and actionable
-
-# --- prompt/rendering ---------------------------------------------------------
+# --------------------------------------------------------------------------- #
+# Small helper: render prompt
+# --------------------------------------------------------------------------- #
 
 def _render_user_prompt(state: Dict) -> str:
-    ctx_list = state.get("context", []) or []
+    ctx_list = state.get("context") or []
     ctx_block = "- " + "\n- ".join(ctx_list) if ctx_list else "(none)"
     return USER_TEMPLATE.format(
         subject=state.get("subject", ""),
@@ -95,13 +64,55 @@ def _render_user_prompt(state: Dict) -> str:
         draft=state.get("draft", ""),
     )
 
-def _parse_review_json(raw: str) -> Dict:
+
+# --------------------------------------------------------------------------- #
+# Hard-rule checks (deterministic, very simple)
+# --------------------------------------------------------------------------- #
+
+def _policy_guardrail(state: Dict) -> str | None:
     """
-    Parse reviewer JSON with defensive defaults.
-    Always returns {'approved': bool, 'feedback': str}.
+    Reject obvious refund-policy issues without calling the LLM.
+
+    Rules:
+      - If the user talks about a *refund* and the context mentions a 14-day window,
+        then the draft must clearly mention that window (e.g., '14 days' or 'two weeks').
+      - If the draft promises an 'immediate' or 'full' refund without citing a policy limit,
+        reject it.
+    Returns:
+      None if OK, else a short feedback string explaining the rejection.
     """
+    subject = (state.get("subject") or "").lower()
+    description = (state.get("description") or "").lower()
+    user_text = subject + " " + description
+
+    draft = (state.get("draft") or "").lower()
+    context_text = " ".join(state.get("context") or []).lower()
+
+    user_mentions_refund = "refund" in user_text
+    context_has_14_day = (("14" in context_text and "day" in context_text) or "two week" in context_text)
+
+    # If refund is being asked and policy has a 14-day window, the draft must name it
+    if user_mentions_refund and context_has_14_day:
+        draft_mentions_window = (("14" in draft and "day" in draft) or "two week" in draft)
+        if not draft_mentions_window:
+            return "Refund request: please mention the 14-day (two-week) policy window explicitly."
+
+    # Don't allow promises that aren't grounded in a policy limit
+    if "refund" in draft and ("immediate refund" in draft or "full refund" in draft):
+        if not (("14" in draft and "day" in draft) or "two week" in draft):
+            return "Do not promise refunds without citing the policy limit (e.g., 14 days)."
+
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Safe JSON parse
+# --------------------------------------------------------------------------- #
+
+def _parse_json_or_default(raw: str) -> Dict:
+    """Always return {'approved': bool, 'feedback': str}."""
     approved = False
-    feedback = "Automatic fallback: unable to parse review; ensure the reply cites context steps."
+    feedback = "Unable to parse review; please cite a concrete policy detail (e.g., '14 days') and add a clear next step."
     try:
         data = json.loads(raw or "{}")
         if isinstance(data.get("approved"), bool):
@@ -110,22 +121,31 @@ def _parse_review_json(raw: str) -> Dict:
         if isinstance(fb, str) and fb.strip():
             feedback = fb.strip()
         else:
-            feedback = "Looks good." if approved else "Please ground the reply in the provided context and add clear next steps."
+            feedback = "Looks good." if approved else "Please cite a concrete policy detail and add a clear next step."
     except Exception:
         pass
     return {"approved": approved, "feedback": feedback}
 
-# --- node --------------------------------------------------------------------
+
+# --------------------------------------------------------------------------- #
+# Node: review
+# --------------------------------------------------------------------------- #
 
 def review(state: Dict) -> Dict:
     """
     LangGraph node: review the current draft and gate approval.
     """
+    # 1) Quick policy guardrail (deterministic)
+    violation = _policy_guardrail(state)
+    if violation:
+        return {"approved": False, "review": {"feedback": violation}}
+
+    # 2) Ask the LLM to review
     user_prompt = _render_user_prompt(state)
     try:
         completion: ChatCompletion = _openai.chat.completions.create(
             model=MODEL_NAME,
-            temperature=0,  # keep deterministic
+            temperature=0,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -133,19 +153,19 @@ def review(state: Dict) -> Dict:
             ],
         )
         content = completion.choices[0].message.content or "{}"
+        parsed = _parse_json_or_default(content)
+        return {"approved": parsed["approved"], "review": {"feedback": parsed["feedback"]}}
     except Exception:
-        # If API fails, use a deterministic minimal rule so the graph continues.
-        draft = state.get("draft", "")
-        approved = "Context:\n-" in draft or _looks_grounded_and_actionable(state)
-        fb = "Looks good." if approved else "Please include at least one concrete step from retrieval context."
-        return {"approved": approved, "review": {"feedback": fb}}
+        # 3) Fallback if API fails: very small rule set
+        draft = (state.get("draft") or "").lower()
+        context_text = " ".join(state.get("context") or []).lower()
+        has_concrete_detail = any(x in draft for x in ["14 day", "14-day", "two week", "section"])
+        has_action = any(x in draft for x in ["please", "try", "follow", "update", "reset", "check", "contact"])
 
-    parsed = _parse_review_json(content)
-
-    # ✅ LENIENCY OVERRIDE:
-    # If the LLM said False but our heuristic says it's clearly grounded & actionable, approve it.
-    if not parsed["approved"] and _looks_grounded_and_actionable(state):
-        parsed["approved"] = True
-        parsed["feedback"] = "Approved: grounded and actionable; minor style issues are acceptable."
-
-    return {"approved": parsed["approved"], "review": {"feedback": parsed["feedback"]}}
+        approved = bool(has_concrete_detail and has_action)
+        feedback = (
+            "Looks good."
+            if approved
+            else "Reject: please cite a concrete policy detail (e.g., '14 days') and include a clear next step."
+        )
+        return {"approved": approved, "review": {"feedback": feedback}}
