@@ -8,7 +8,7 @@ What this does:
 
 Design notes:
 - Indexes are created by:  python -m src.rag_ingest
-- We cache loaded indexes per category for speed.
+- I cache loaded indexes per category for speed.
 - If an index is missing/unavailable, we fall back to a tiny built-in corpus so the graph never stalls.
 """
 
